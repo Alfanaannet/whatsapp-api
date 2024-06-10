@@ -4,11 +4,11 @@ const path = require('path')
 const sessions = new Map()
 const { baseWebhookURL, sessionFolderPath, maxAttachmentSize, setMessagesAsSeen, webVersion, webVersionCacheType, recoverSessions } = require('./config')
 const { triggerWebhook, waitForNestedObject, checkIfEventisEnabled } = require('./utils')
+const returnData = { success: false, state: null, message: '' }
 
 // Function to validate if the session is ready
 const validateSession = async (sessionId) => {
   try {
-    const returnData = { success: false, state: null, message: '' }
 
     // Session not Connected 😢
     if (!sessions.has(sessionId) || !sessions.get(sessionId)) {
@@ -22,27 +22,21 @@ const validateSession = async (sessionId) => {
       .catch((err) => { return { success: false, state: null, message: err.message } })
 
     // Wait for client.pupPage to be evaluable
-    let maxRetry = 0
     while (true) {
       try {
         if (client.pupPage.isClosed()) {
           return { success: false, state: null, message: 'browser tab closed' }
         }
-        await Promise.race([
-          client.pupPage.evaluate('1'),
-          new Promise(resolve => setTimeout(resolve, 1000))
-        ])
-        break
+        await client.pupPage.evaluate('1'); break
       } catch (error) {
-        if (maxRetry === 2) {
-          return { success: false, state: null, message: 'session closed' }
-        }
-        maxRetry++
+        // Ignore error and wait for a bit before trying again
+        await new Promise(resolve => setTimeout(resolve, 100))
       }
     }
-
     const state = await client.getState()
-    returnData.state = state
+    if (state) {
+      returnData.state = state
+    }
     if (state !== 'CONNECTED') {
       returnData.message = 'session_not_connected'
       return returnData
@@ -174,6 +168,7 @@ const initializeEvents = (client, sessionId) => {
   checkIfEventisEnabled('authenticated')
     .then(_ => {
       client.on('authenticated', () => {
+        returnData.state = 'authenticated'
         triggerWebhook(sessionWebhook, sessionId, 'authenticated')
       })
     })
@@ -223,6 +218,7 @@ const initializeEvents = (client, sessionId) => {
   checkIfEventisEnabled('loading_screen')
     .then(_ => {
       client.on('loading_screen', (percent, message) => {
+        returnData.state = 'loading_screen'
         triggerWebhook(sessionWebhook, sessionId, 'loading_screen', { percent, message })
       })
     })
@@ -284,33 +280,10 @@ const initializeEvents = (client, sessionId) => {
       })
     })
 
-  checkIfEventisEnabled('message_edit')
-    .then(_ => {
-      client.on('message_edit', (message, newBody, prevBody) => {
-        triggerWebhook(sessionWebhook, sessionId, 'message_edit', { message, newBody, prevBody })
-      })
-    })
-
-  checkIfEventisEnabled('message_ciphertext')
-    .then(_ => {
-      client.on('message_ciphertext', (message) => {
-        triggerWebhook(sessionWebhook, sessionId, 'message_ciphertext', { message })
-      })
-    })
-
   checkIfEventisEnabled('message_revoke_everyone')
     .then(_ => {
-      // eslint-disable-next-line camelcase
-      client.on('message_revoke_everyone', async (message) => {
-        // eslint-disable-next-line camelcase
-        triggerWebhook(sessionWebhook, sessionId, 'message_revoke_everyone', { message })
-      })
-    })
-
-  checkIfEventisEnabled('message_revoke_me')
-    .then(_ => {
-      client.on('message_revoke_me', async (message) => {
-        triggerWebhook(sessionWebhook, sessionId, 'message_revoke_me', { message })
+      client.on('message_revoke_everyone', async (after, before) => {
+        triggerWebhook(sessionWebhook, sessionId, 'message_revoke_everyone', { after, before })
       })
     })
 
@@ -326,6 +299,7 @@ const initializeEvents = (client, sessionId) => {
   checkIfEventisEnabled('ready')
     .then(_ => {
       client.on('ready', () => {
+        returnData.state = 'ready'
         triggerWebhook(sessionWebhook, sessionId, 'ready')
       })
     })
@@ -334,27 +308,6 @@ const initializeEvents = (client, sessionId) => {
     .then(_ => {
       client.on('contact_changed', async (message, oldId, newId, isContact) => {
         triggerWebhook(sessionWebhook, sessionId, 'contact_changed', { message, oldId, newId, isContact })
-      })
-    })
-
-  checkIfEventisEnabled('chat_removed')
-    .then(_ => {
-      client.on('chat_removed', async (chat) => {
-        triggerWebhook(sessionWebhook, sessionId, 'chat_removed', { chat })
-      })
-    })
-
-  checkIfEventisEnabled('chat_archived')
-    .then(_ => {
-      client.on('chat_archived', async (chat, currState, prevState) => {
-        triggerWebhook(sessionWebhook, sessionId, 'chat_archived', { chat, currState, prevState })
-      })
-    })
-
-  checkIfEventisEnabled('unread_count')
-    .then(_ => {
-      client.on('unread_count', async (chat) => {
-        triggerWebhook(sessionWebhook, sessionId, 'unread_count', { chat })
       })
     })
 }
